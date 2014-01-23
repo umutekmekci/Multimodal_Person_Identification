@@ -101,6 +101,7 @@ class MMUnsCluster:
                     'assigned_names': [name, name,...]  sonradan ekleniyor
                     'sealed': [True, False,...]  sonradan ekleniyor
         """
+        assigned_dict = {}
         N = 0
         speaker_cluster = self.initialize_dict()
         with open(file_name,'r') as f_:
@@ -120,7 +121,9 @@ class MMUnsCluster:
                 if speaker_cluster[program_name][program_idx][program_date]['interval'][-1][0] == prev_beg_time:
                     print 'buldum speaker'
                 prev_beg_time = time_interval[0]
-        return speaker_cluster,N
+                if not person_name in assigned_dict:
+                    assigned_dict[person_name] = []
+        return speaker_cluster,N,assigned_dict
         
     def parse_etf_file(self, file_name):
         speaker_cluster = self.initialize_dict()
@@ -165,6 +168,258 @@ class MMUnsCluster:
                 prev_beg_time = time_interval[0]
         return written_names
         
+    def _get_name_cand_list(self, beg_time,end_time,wr_intervals, wr_names):
+        name_list = []
+        for i, (bb, ee) in enumerate(wr_intervals):
+            if bb < beg_time and ee < beg_time:
+                continue
+            if bb>end_time and ee > end_time:
+                continue
+                #break
+            name_list.append(wr_names[i])
+        return name_list
+        
+    def test_for_labels(self, speaker_cluster, cluster_general_intervals, name_cluster,spoken_cluster,cluster_frequencies):
+        name_cand_dict = {}
+        for program_name in speaker_cluster:
+            for program_idx in speaker_cluster[program_name]:
+                for program_date in speaker_cluster[program_name][program_idx]:
+                    cluster_names = np.array(cluster_general_intervals[program_name][program_idx][program_date].keys())
+                    cl_intervals = np.array(cluster_general_intervals[program_name][program_idx][program_date].values())
+                    inds = cl_intervals[:,0].argsort()
+                    cluster_names = cluster_names[inds]
+                    cl_intervals = cl_intervals[inds]
+                    time_intervals = speaker_cluster[program_name][program_idx][program_date]['interval']
+                    wr_intervals = name_cluster[program_name][program_idx][program_date]['interval']
+                    wr_names = name_cluster[program_name][program_idx][program_date]['cluster_names']
+                    for i, cluster_name in enumerate(speaker_cluster[program_name][program_idx][program_date]['cluster_names']):
+                        if not cluster_name in name_cand_dict or not name_cand_dict[cluster_name]:
+                            end_time = time_intervals[i][-1]
+                            ind = np.nonzero(cluster_names == cluster_name)[0][0]
+                            end_time2 = cl_intervals[ind,1]
+                            beg_time = cl_intervals[0,0] if ind in [0,1] else cl_intervals[ind-2,0]
+                            name_cand_dict[cluster_name] = self._get_name_cand_list(beg_time,end_time2,wr_intervals, wr_names)
+                            #ii = ind if ind in [0,] else ind-1
+                            #name_cand_dict[cluster_name].extend(name_cand_dict[cluster_names[ii]])
+        print "there are ",np.mean([len(set(x)) for x in name_cand_dict.values()]), " average name candidates"
+        buldum = 0
+        toplam = 0
+        wr,sp = 0,0
+        total2,tot_true,tot_false = 0,0,0
+        tot_true2,tot_false2 = 0,0
+        sup_equal,sup_true,kotu,iyi,sim,sim2 = 0,0,0,0,0,0
+        true_tot3,false_tot3, total3,true_tot33,false_tot33 = 0,0,0,0,0
+        true_names,false_names,true_f_l,false_f_l = [],[],[],[]
+        for program_name in speaker_cluster:
+            for program_idx in speaker_cluster[program_name]:
+                for program_date in speaker_cluster[program_name][program_idx]:
+                    labels = speaker_cluster[program_name][program_idx][program_date]['labels']
+                    wr_names = name_cluster[program_name][program_idx][program_date]['cluster_names']
+                    GMM_labels = speaker_cluster[program_name][program_idx][program_date]['GMM']
+                    SVM_labels = speaker_cluster[program_name][program_idx][program_date]['SVM']
+                    ivector_labels = speaker_cluster[program_name][program_idx][program_date]['ivector']
+                    spoken_labels = spoken_cluster[program_name][program_idx][program_date]['cluster_names']
+                    cll_names = speaker_cluster[program_name][program_idx][program_date]['cluster_names']
+                    for i, cluster_name in enumerate(speaker_cluster[program_name][program_idx][program_date]['cluster_names']):
+                        #if cluster_name == "MS12_LCP_CaVousRegarde_2011-12-20_204600":
+                        #    pass
+                        if labels[i]:
+                            toplam += 1
+                            name_cands = name_cand_dict[cluster_name]
+                            label_name = labels[i].keys()[np.argmax(labels[i].values())]
+                            gmm_label = GMM_labels[i].keys()[np.argmax(GMM_labels[i].values())]
+                            svm_label = SVM_labels[i].keys()[np.argmax(SVM_labels[i].values())]
+                            if ivector_labels[i]:
+                                ivector_label = ivector_labels[i].keys()[np.argmax(ivector_labels[i].values())]
+                            else:
+                                ivector_label = svm_label
+                            gmm_prob,svm_prob = float(gmm_label[gmm_label.find('<')+1:-1]),float(svm_label[svm_label.find('<')+1:-1])
+                            ivector_prob = float(ivector_label[ivector_label.find('<')+1:-1])
+                            gmm_label,svm_label = gmm_label[:gmm_label.find('<')],svm_label[:svm_label.find('<')]
+                            ivector_label = ivector_label[:ivector_label.find('<')]
+                            frequency = cluster_frequencies[program_name][program_idx][program_date][cluster_name]
+                            if label_name in wr_names:
+                                wr += 1
+                            if label_name in spoken_labels:
+                                sp+= 1
+                            if label_name in name_cands:
+                                buldum += 1
+                            if svm_label != gmm_label:
+                                total3 += 1
+                                if ivector_label == label_name:
+                                    true_tot3 +=1
+                                    if ivector_label in name_cands:
+                                        true_tot33 += 1
+                                else:
+                                    if ivector_label in name_cands:
+                                        false_tot33 += 1
+                                    false_tot3 += 1
+                            
+                            if gmm_label == svm_label and not gmm_label in name_cands:
+                                total2 += 1
+                                if gmm_label == label_name:
+                                    tot_true+=1
+                                    sim_list = []
+                                    for k,cl_nn in enumerate(cll_names[:i]):
+                                        gmm_ = GMM_labels[k].keys()[np.argmax(GMM_labels[k].values())]
+                                        svm_ = SVM_labels[k].keys()[np.argmax(SVM_labels[k].values())]
+                                        gmm_,svm_ = gmm_[:gmm_.find('<')],svm_[:svm_.find('<')]
+                                        if gmm_ == gmm_label or svm_ == svm_label:
+                                            sim_list.append(cl_nn)
+                                    if sim_list:
+                                        sim+= 1
+                                    true_f_l.append(frequency)
+                                    if gmm_label in spoken_labels:
+                                        tot_true2 += 1
+                                    true_names.append(gmm_label)
+                                else:
+                                    tot_false+=1
+                                    sim_list = []
+                                    for k,cl_nn in enumerate(cll_names[:i]):
+                                        gmm_ = GMM_labels[k].keys()[np.argmax(GMM_labels[k].values())]
+                                        svm_ = SVM_labels[k].keys()[np.argmax(SVM_labels[k].values())]
+                                        gmm_,svm_ = gmm_[:gmm_.find('<')],svm_[:svm_.find('<')]
+                                        if gmm_ == gmm_label or svm_ == svm_label:
+                                            sim_list.append(cl_nn)
+                                    if sim_list:
+                                        sim2+= 1
+                                    false_f_l.append(frequency)
+                                    if gmm_label in spoken_labels:
+                                        tot_false2 += 1
+                                    false_names.append((gmm_label,label_name))
+                            if gmm_label == svm_label and gmm_prob>0 and svm_prob>0:
+                                sup_equal += 1
+                                if label_name == gmm_label:
+                                    sup_true+=1
+                                    if gmm_label in name_cands:
+                                        iyi += 1
+                                else:
+                                    if gmm_label in name_cands:
+                                        kotu += 1
+        print "bulunan ",buldum, "  in ",toplam
+        print "writtten_names: ",wr, " spoken_names: ",sp
+        print "dogru: ",sup_true, " in ",sup_equal, " in ",toplam
+        print "kotu: ", kotu, " iyi: ",iyi
+        print "dogru: ",tot_true, " yanlis: ",tot_false, " in ", total2
+        print "sim: ", sim, " sim2: ",sim2
+        print "tot_true2: ",tot_true2, " tot_false2: ", tot_false2
+        print
+        print "total: ",total3, " dogru: ",true_tot3, " yanlis: ",false_tot3
+        print "true_tot33: ",true_tot33, " false_tot33 ",false_tot33
+       # print "true frequencies"
+       # print true_f_l
+       # print
+       # print "false_frequencies"
+       # print false_f_l
+        #print "true_names:"
+        #print true_names
+        #print
+        #print "false_names:"
+        #for x in false_names:
+        #    print x
+        return name_cand_dict
+        
+                    
+        
+    def _interval_of_clusters(self, cl_names, interval_sp,i):
+        cl_name = cl_names[i]
+        beg_time,end_time = interval_sp[i]
+        for name, k_interval in zip(cl_names[i+1:],interval_sp[i+1:]):
+            if name == cl_name:
+                end_time = k_interval[-1]
+        return (beg_time,end_time)
+        
+    def interval_of_clusters(self, speaker_cluster):
+        cluster_general_intervals = {}
+        cluster_frequencies = {}
+        for program_name in speaker_cluster:
+            if not program_name in cluster_general_intervals:
+                cluster_general_intervals[program_name] = {}
+                cluster_frequencies[program_name] = {}
+            for program_idx in speaker_cluster[program_name]:
+                if not program_idx in cluster_general_intervals[program_name]:
+                    cluster_general_intervals[program_name][program_idx] = {}
+                    cluster_frequencies[program_name][program_idx] = {}
+                for program_date in speaker_cluster[program_name][program_idx]:
+                    if not program_date in cluster_general_intervals[program_name][program_idx]:
+                        cluster_general_intervals[program_name][program_idx][program_date] = {}
+                        cluster_frequencies[program_name][program_idx][program_date] = {}
+                    interval_sp = speaker_cluster[program_name][program_idx][program_date]['interval']
+                    cl_names = speaker_cluster[program_name][program_idx][program_date]['cluster_names']
+                    for i, cluster_name in enumerate(speaker_cluster[program_name][program_idx][program_date]['cluster_names']):
+                        if not cluster_name in cluster_general_intervals[program_name][program_idx][program_date]:
+                            cluster_general_intervals[program_name][program_idx][program_date][cluster_name] = self._interval_of_clusters(cl_names, interval_sp,i)
+                            cluster_frequencies[program_name][program_idx][program_date][cluster_name]  = 1
+                        else:
+                            cluster_frequencies[program_name][program_idx][program_date][cluster_name]+=1
+        return cluster_general_intervals,cluster_frequencies
+        
+    def _check_for_coc(self, cl_dict, beg_time, end_time, assign_name):
+        if not cl_dict:
+            return False
+        merge_clusters = []
+        for cl_name in cl_dict:
+            cl_beg, cl_end = cl_dict[cl_name]['interval']
+            if beg_time<cl_beg and end_time>cl_beg and end_time<=cl_end:
+                merge_clusters.append((cl_name,beg_time,cl_end))
+            elif beg_time<cl_beg and end_time>cl_beg and end_time>=cl_end:
+                merge_clusters.append((cl_name,beg_time,end_time))
+            elif beg_time>=cl_beg and beg_time<cl_end and end_time<=cl_end:
+                merge_clusters.append((cl_name,cl_beg,cl_end))
+            elif beg_time>=cl_beg and beg_time<cl_end and end_time>cl_end:
+                merge_clusters.append((cl_name,cl_beg,end_time))
+        if not merge_clusters:
+            return False
+        if len(merge_clusters) == 1:
+            cl_dict[merge_clusters[0][0]]['interval'] = merge_clusters[0][1:]
+            cl_dict[merge_clusters[0][0]]['clusters'].append(assign_name)
+            return True
+        else:
+            new_cl = {'interval':[], 'clusters':[]}
+            new_beg,new_end = merge_clusters[0][1:]
+            new_name = merge_clusters[0][0]
+            new_cl['clusters'].extend(cl_dict[new_name]['clusters'])      
+            cl_dict.pop(new_name)
+            for item_ in merge_clusters[1:]:
+                new_cl['clusters'].extend(cl_dict[item_[0]]['clusters'])
+                name, beg_time,end_time = item_
+                if beg_time < new_beg:
+                    new_beg = beg_time
+                if end_time > new_end:
+                    new_end = end_time
+                if name < new_name:
+                    new_name = name
+                cl_dict.pop(name)
+            new_cl['interval'] = [new_beg, new_end]
+            cl_dict[new_name] = new_cl
+            return True
+            
+        
+    def cluster_of_clusters_general(self, speaker_cluster, cluster_general_intervals):
+        coc_dict = {}
+        current_cluster = -1
+        for program_name in cluster_general_intervals:
+            if not program_name in coc_dict:
+                coc_dict[program_name] = {}
+            for program_idx in cluster_general_intervals[program_name]:
+                if not program_idx in coc_dict[program_name]:
+                    coc_dict[program_name][program_idx] = {}
+                for program_date in cluster_general_intervals[program_name][program_idx]:
+                    if not program_date in coc_dict[program_name][program_idx]:
+                        coc_dict[program_name][program_idx][program_date] = {}
+                    for i, cluster_name in enumerate(cluster_general_intervals[program_name][program_idx][program_date]):
+                        beg_time, end_time = cluster_general_intervals[program_name][program_idx][program_date][cluster_name]
+                        isok = self._check_for_coc(coc_dict[program_name][program_idx][program_date], beg_time,end_time,cluster_name)
+                        if not isok:
+                            current_cluster += 1
+                            coc_dict[program_name][program_idx][program_date][current_cluster] = {'interval':[beg_time,end_time], 'clusters':[cluster_name,]}
+        self._assign_clusters_and_names_coc(coc_dict,speaker_cluster)
+        return coc_dict
+        
+    def _assign_clusters_and_names_coc(self, coc_dict,speaker_cluster):
+        pass
+                            
+        
     """
     def parse_speaker_identification_files(self, file_name):
         speaker_identities = self.initialize_dict()
@@ -195,12 +450,17 @@ class MMUnsCluster:
         interval_wr = np.array(interval_wr)
         for i, inter_sp in enumerate(interval_sp):
             beg_sp,end_sp = inter_sp[0],inter_sp[1]
+            if beg_sp>2646 and beg_sp<2648 and end_sp>2652 and end_sp<2656:
+                pass
             for inter_wr, name in zip(interval_wr,wr_names):
                 beg_wr,end_wr = inter_wr[0],inter_wr[1]
+                if beg_wr>2646 and beg_wr<2648 and end_wr>2652 and end_wr<2656:
+                    pass
                 if beg_wr < beg_sp and end_wr <= beg_sp:
                     continue
                 if beg_wr >= end_sp and end_wr > end_sp:
-                    break
+                    #break
+                    continue
                 if beg_wr <= beg_sp and end_wr <= end_sp:
                     overlap_list[i][name] = overlap_list[i].get(name,0) + end_wr - beg_sp
                 elif beg_wr >= beg_sp and end_wr <= end_sp:
@@ -215,14 +475,167 @@ class MMUnsCluster:
         for program_name in speaker_cluster:
             for program_idx in speaker_cluster[program_name]:
                 for program_date in speaker_cluster[program_name][program_idx]:
-                    #if program_name == "LCP_CaVousRegarde" and program_date == "2011-12-20" and program_idx == "204600":
-                    #    pass
+                    if program_name == "LCP_CaVousRegarde" and program_date == "2011-12-20" and program_idx == "204600" and list_name == 'ivector':
+                        pass
                     interval_sp = speaker_cluster[program_name][program_idx][program_date]['interval']
                     interval_wr = written_names[program_name][program_idx][program_date]['interval']
                     names_wr = written_names[program_name][program_idx][program_date]['cluster_names']
                     overlap_list = self._overlap_modes(interval_sp, interval_wr, names_wr)
                     speaker_cluster[program_name][program_idx][program_date][list_name] = overlap_list
         return speaker_cluster
+        
+    def assign_raw_supervised2(self, speaker_cluster,spoken_cluster,name_cand_dict,assigned_dict):
+        N_assigned = 0
+        for program_name in speaker_cluster:
+            for program_idx in speaker_cluster[program_name]:
+                for program_date in speaker_cluster[program_name][program_idx]:
+                    sealed = speaker_cluster[program_name][program_idx][program_date]['sealed']
+                    assigned_names = speaker_cluster[program_name][program_idx][program_date]['assigned_names']
+                    candidate_names_GMM = speaker_cluster[program_name][program_idx][program_date]["GMM"]
+                    candidate_names_SVM = speaker_cluster[program_name][program_idx][program_date]["SVM"]
+                    candidate_names_ivector = speaker_cluster[program_name][program_idx][program_date]["ivector"]
+                    spoken_labels = spoken_cluster[program_name][program_idx][program_date]["cluster_names"]
+                    for i, cluster_name in enumerate(speaker_cluster[program_name][program_idx][program_date]['cluster_names']):
+                        if not sealed[i]:
+                            gmm_label = candidate_names_GMM[i].keys()[np.argmax(candidate_names_GMM[i].values())]
+                            svm_label = candidate_names_SVM[i].keys()[np.argmax(candidate_names_SVM[i].values())]
+                            if not candidate_names_ivector[i]:
+                                ivector_label = svm_label
+                            else:
+                                ivector_label = candidate_names_ivector[i].keys()[np.argmax(candidate_names_ivector[i].values())]
+                            gmm_prob = float(gmm_label[gmm_label.index('<')+1:-1])
+                            svm_prob = float(svm_label[svm_label.index('<')+1:-1])
+                            ivector_prob = float(ivector_label[ivector_label.index('<')+1:-1])
+                            gmm_label = gmm_label[:gmm_label.index('<')]
+                            svm_label = svm_label[:svm_label.index('<')]
+                            ivector_label = ivector_label[:ivector_label.index('<')]
+                            name_cands = name_cand_dict[cluster_name]
+                            if gmm_label == svm_label == ivector_label: # and (gmm_prob > 0) and (svm_prob > 0): # and (gmm_label in name_cands):
+                                sealed[i] = True
+                                assigned_names[i] = gmm_label
+                                N_assigned += 1
+                                assigned_dict[cluster_name].append((gmm_label,'SUP1'))
+                            #elif gmm_label == svm_label and (gmm_label in spoken_labels) and (not gmm_label in name_cands):
+                            #    sealed[i] = True 
+                            #    assigned_names[i] = gmm_label
+                            #    N_assigned += 1
+                            #    assigned_dict[cluster_name].append((gmm_label,'SUP'))
+                            elif gmm_label !=svm_label and (ivector_label in name_cands):
+                                sealed[i] = True 
+                                assigned_names[i] = ivector_label
+                                N_assigned += 1
+                                assigned_dict[cluster_name].append((ivector_label,'SUP2'))
+        print N_assigned, "cluster is assigned in raw2"
+        return speaker_cluster
+        
+    def assign_with_similarity(self, speaker_cluster,name_cand_dict, spoken_cluster,assigned_dict,mode_choose = 'SUP2'):
+        N_assigned = 0
+        for program_name in speaker_cluster:
+            for program_idx in speaker_cluster[program_name]:
+                for program_date in speaker_cluster[program_name][program_idx]:
+                    sealed = speaker_cluster[program_name][program_idx][program_date]['sealed']
+                    assigned_names = speaker_cluster[program_name][program_idx][program_date]['assigned_names']
+                    candidate_names_GMM = speaker_cluster[program_name][program_idx][program_date]["GMM"]
+                    candidate_names_SVM = speaker_cluster[program_name][program_idx][program_date]["SVM"]
+                    candidate_names_ivector = speaker_cluster[program_name][program_idx][program_date]["ivector"]
+                    spoken_labels = spoken_cluster[program_name][program_idx][program_date]["cluster_names"]
+                    cl_names = speaker_cluster[program_name][program_idx][program_date]["cluster_names"]
+                    for i, cluster_name in enumerate(speaker_cluster[program_name][program_idx][program_date]['cluster_names']):
+                        if not sealed[i] and i != 0:
+                            gmm_label = candidate_names_GMM[i].keys()
+                            svm_label = candidate_names_SVM[i].keys()
+                            if candidate_names_ivector[i]:
+                                ivector_label = candidate_names_ivector[i].keys()
+                            else:
+                                ivector_label = svm_label
+                            gmm_prob = [float(x[x.index('<')+1:-1]) for x in gmm_label]
+                            svm_prob = [float(x[x.index('<')+1:-1]) for x in svm_label]
+                            ivector_prob = [float(x[x.index('<')+1:-1]) for x in ivector_label]
+                            gmm_label_ = [x[:x.index('<')] for x in gmm_label]
+                            svm_label_ = [x[:x.index('<')] for x in svm_label]
+                            ivector_label_ = [x[:x.index('<')] for x in ivector_label]
+                            name_cands = name_cand_dict[cluster_name]
+                            sim_list = []
+                            for k, cl_name in enumerate(cl_names[:i]):
+                                gmm_sim = candidate_names_GMM[k].keys()
+                                svm_sim = candidate_names_SVM[k].keys()
+                                if candidate_names_ivector[k]:
+                                    ivector_sim = candidate_names_ivector[k].keys()
+                                else:
+                                    ivector_sim = svm_sim
+                                gmm_sim_prob = [float(x[x.index('<')+1:-1]) for x in gmm_sim]
+                                svm_sim_prob = [float(x[x.index('<')+1:-1]) for x in svm_sim]
+                                ivector_sim_prob = [float(x[x.index('<')+1:-1]) for x in ivector_sim]
+                                gmm_sim_ = [x[:x.index('<')] for x in gmm_sim]
+                                svm_sim_ = [x[:x.index('<')] for x in svm_sim]
+                                ivector_sim_ = [x[:x.index('<')] for x in ivector_sim]
+                                conn_weight = 0
+                                for nn in gmm_label_:
+                                    if nn in gmm_sim_:
+                                        conn_weight += 0.5
+                                for nn in svm_label_:
+                                    if nn in svm_sim_:
+                                        conn_weight += 0.8
+                                for nn in ivector_label_:
+                                    if nn in ivector_sim_:
+                                        conn_weight += 1
+                                if conn_weight != 0 and cl_name != cluster_name:
+                                    sim_list.append((conn_weight,cl_name,assigned_names[k]))
+                            sim_list.sort(reverse = True)
+                            if not sim_list: continue
+                            for cw_,cl_name_,name_ in (sim_list[0],):
+                                if name_ in name_cands:
+                                    sealed[i] = True
+                                    assigned_names[i] = name_
+                                    N_assigned += 1
+                                    assigned_dict[cluster_name].append((name_,'sim1'))
+                                    #break
+                                elif assigned_dict[cl_name] and assigned_dict[cl_name][0][1] == mode_choose:
+                                    sealed[i] = True
+                                    assigned_names[i] = name_
+                                    N_assigned += 1
+                                    assigned_dict[cluster_name].append((name_,'sim2'))
+                                    
+                            
+        print N_assigned," assigned in sim "
+        return speaker_cluster
+                                
+    
+    def assign_with_propoagate(self, speaker_cluster, name_cand_dict, assigned_dict):
+        N_assigned = 0
+        for program_name in speaker_cluster:
+            for program_idx in speaker_cluster[program_name]:
+                for program_date in speaker_cluster[program_name][program_idx]:
+                    sealed = speaker_cluster[program_name][program_idx][program_date]['sealed']
+                    assigned_names = speaker_cluster[program_name][program_idx][program_date]['assigned_names']
+                    for i, cluster_name in enumerate(speaker_cluster[program_name][program_idx][program_date]['cluster_names']):
+                        if not sealed[i] and assigned_dict[cluster_name]:
+                            pp = np.zeros(len(assigned_dict[cluster_name]))
+                            for k,(name,method) in enumerate(assigned_dict[cluster_name]):
+                                if method == 'SUP1' and name in name_cand_dict[cluster_name]:
+                                    pp[k] = 1
+                                elif method == 'M2' and name in name_cand_dict[cluster_name]:
+                                    pp[k] = 0.8
+                                elif method == 'M3' and name in name_cand_dict[cluster_name]:
+                                    pp[k] = 0.7
+                                #elif method == 'sim1' and name in name_cand_dict[cluster_name]:
+                                #    pp[k] = 0.6
+                                #elif method == 'sim2' and name in name_cand_dict[cluster_name]:
+                                #    pp[k] = 0.5
+                                #elif method == 'M2' and name in name_cand_dict[cluster_name]:
+                                #    pp[k] = 0.4
+                            if pp.sum()>0:
+                                sealed[i] = True
+                                ind = pp.argmax()
+                                assigned_names[i] = assigned_dict[cluster_name][ind][0]
+                                N_assigned += 1
+                            #elif len(name_cand_dict[cluster_name]) == 1:
+                            #    sealed[i] = True
+                            #    assigned_names[i] = name_cand_dict[cluster_name][0]
+                            #    N_assigned += 1
+        print N_assigned, " assigned in propagate"
+        return speaker_cluster
+                            
         
     def assign_raw_supervised(self, speaker_cluster, mode_name = "GMM", all_assign = False):
         N_assigned = 0
@@ -350,7 +763,7 @@ class MMUnsCluster:
         print "there are ", correct, " in ", over_all 
         return result_dict
         
-    def M2_assignment(self, speaker_cluster):
+    def M2_assignment(self, speaker_cluster,assigned_dict):
         one_to_one = 0
         all_sayac = 0
         M2_dict = {}
@@ -370,11 +783,12 @@ class MMUnsCluster:
                             one_to_one += 1
                             assigned_names[i] = overlap_map.keys()[0]
                             sealed[i] = True
+                            assigned_dict[cluster_name].append((assigned_names[i],'M2'))
                             M2_dict[cluster_name].append(assigned_names[i])
         print one_to_one, ' is assigned in M2', all_sayac
         return speaker_cluster, M2_dict
         
-    def propagate_M2(self, speaker_cluster, M2_dict):
+    def propagate_M2(self, speaker_cluster, M2_dict,assigned_dict):
         N_assigned = 0
         for program_name in speaker_cluster:
             for program_idx in speaker_cluster[program_name]:
@@ -386,6 +800,7 @@ class MMUnsCluster:
                             sealed[i] = True 
                             assigned_names[i] = M2_dict[cluster_name][0]
                             N_assigned += 1
+                            assigned_dict[cluster_name].append((assigned_names[i],'M2_prop'))
         print N_assigned, "cluster is assigned in M2_propagate"
         return speaker_cluster
                     
@@ -503,7 +918,7 @@ class MMUnsCluster:
         print N_assigned, "cluster is assigned in method M1"
         return speaker_cluster
         
-    def method_M3(self, speaker_cluster, speaker_document, name_document, name_pers = True):
+    def method_M3(self, speaker_cluster, speaker_document, name_document, assigned_dict,name_pers = True):
         ## name perspective
         speaker_matched = {}
         if name_pers:
@@ -546,6 +961,7 @@ class MMUnsCluster:
                             sealed[i] = True
                             assigned_names[i] = speaker_matched[cluster_name]
                             N_assigned += 1
+                            assigned_dict[cluster_name].append((assigned_names[i],'M3'))
         print N_assigned, "cluster is assigned in method M3"
         return speaker_cluster
             
@@ -612,20 +1028,39 @@ class MMUnsCluster:
         return (speaker_document,name_document)
 
 if __name__ == '__main__':
-     list_of_shows = r'C:\Users\daredavil\Documents\hbredin-repere\phase2\lists\uri.test1.lst'
-     diarization_file_name = r'C:\Users\daredavil\Documents\hbredin-repere\phase2\auto\speaker\diarization\cross_show_full.test1.mdtm'
+     list_of_shows = r'C:\Users\daredavil\Documents\hbredin-repere\phase2\lists\uri.test2.lst'
+     diarization_file_name = r'C:\Users\daredavil\Documents\hbredin-repere\phase2\auto\speaker\diarization\cross_show_full.test2.mdtm'
      written_file_name = r'C:\Users\daredavil\Documents\hbredin-repere\phase2\auto\written\named_entity_detection\Overlaid_names_aligned.repere'
-     GMM_file = r'C:\Users\daredavil\Documents\hbredin-repere\phase2\auto\speaker\identification\trnTRNm_tstTEST1_genind_GMMUBM_cross_show_full.etf0'
-     SVM_file = r'C:\Users\daredavil\Documents\hbredin-repere\phase2\auto\speaker\identification\trnTRNm_tstTEST1_genind_GSVSVM_cross_show_full.etf0'
-     #labels_file = r'C:\Users\daredavil\Documents\hbredin-repere\phase1\test\groundtruth\speaker.mdtm'
+     spoken_file = r'C:\Users\daredavil\Documents\hbredin-repere\phase2\auto\spoken\named_entity_detection\spoken.4.1.processed.repere'
+     GMM_file = r'C:\Users\daredavil\Documents\hbredin-repere\phase2\auto\speaker\identification\trnTRNm_tstTEST2_genind_GMMUBM_cross_show_full.etf0'
+     SVM_file = r'C:\Users\daredavil\Documents\hbredin-repere\phase2\auto\speaker\identification\trnTRNm_tstTEST2_genind_GSVSVM_cross_show_full.etf0'
+     ivector_file = r'C:\Users\daredavil\Documents\hbredin-repere\phase2\auto\speaker\identification\trnTRNm_tstTEST2_genind_IVECTOR_PCA150_mono_show_full.seg_wise.etf0'
+     labels_file = r'C:\Users\daredavil\Documents\hbredin-repere\phase2\groundtruth\speaker.mdtm'
      obj = MMUnsCluster(list_of_shows)
-     speaker_cluster,N_input = obj.parse_diarization_file(diarization_file_name)
+     speaker_cluster,N_input,assigned_dict = obj.parse_diarization_file(diarization_file_name)
      name_cluster = obj.parse_written_name_file(written_file_name)
      speaker_cluster = obj.overlap_modes(speaker_cluster,name_cluster)
+     spoken_cluster = obj.parse_written_name_file(spoken_file)
+     speaker_cluster = obj.overlap_modes(speaker_cluster, spoken_cluster, 'spoken')
+     
+     cluster_general_intervals,cluster_frequencies = obj.interval_of_clusters(speaker_cluster)
+     labels_dict,_,_ = obj.parse_diarization_file(labels_file)
+     speaker_cluster = obj.overlap_modes(speaker_cluster, labels_dict, 'labels')  
      GMM_cluster = obj.parse_etf_file(GMM_file)
      SVM_cluster = obj.parse_etf_file(SVM_file)
+     ivector_cluster = obj.parse_etf_file(ivector_file)
      speaker_cluster = obj.overlap_modes(speaker_cluster, GMM_cluster,list_name = 'GMM')
      speaker_cluster = obj.overlap_modes(speaker_cluster, SVM_cluster,list_name = 'SVM')
+     speaker_cluster = obj.overlap_modes(speaker_cluster, ivector_cluster,list_name = 'ivector')
+     name_cand_dict = obj.test_for_labels(speaker_cluster, cluster_general_intervals,name_cluster,spoken_cluster,cluster_frequencies)     
+     #raise
+     #coc_dict = obj.cluster_of_clusters_general(speaker_cluster, cluster_general_intervals)     
+     
+     #GMM_cluster = obj.parse_etf_file(GMM_file)
+     #SVM_cluster = obj.parse_etf_file(SVM_file)
+     #speaker_cluster = obj.overlap_modes(speaker_cluster, GMM_cluster,list_name = 'GMM')
+     #speaker_cluster = obj.overlap_modes(speaker_cluster, SVM_cluster,list_name = 'SVM')
+     
      ## isimler hala ali<-0.12> şeklinde
      #speaker_trnA_GMM = obj.parse_written_name_file(speaker_ident_trnA_GMM)
      #speaker_cluster = obj.overlap_modes(speaker_cluster,speaker_trnA_GMM,list_name = 'GMM')
@@ -635,9 +1070,17 @@ if __name__ == '__main__':
      #speaker_cluster = obj.overlap_modes(speaker_cluster, labels_dict, 'labels')
      speaker_document,name_document = obj.getSpeakerDoc_NameDoc(speaker_cluster)
      #speaker_cluster = obj.method_M1(speaker_cluster, name_pers = False)
-     speaker_cluster,M2_dict = obj.M2_assignment(speaker_cluster)
-     speaker_cluster = obj.propagate_M2(speaker_cluster,M2_dict)
-     speaker_cluster = obj.method_M3(speaker_cluster, speaker_document, name_document, name_pers = False)
+     speaker_cluster,M2_dict = obj.M2_assignment(speaker_cluster,assigned_dict)
+     speaker_cluster = obj.assign_raw_supervised2(speaker_cluster, spoken_cluster, name_cand_dict,assigned_dict)
+     speaker_cluster = obj.method_M3(speaker_cluster, speaker_document, name_document, assigned_dict,name_pers = False)
+     speaker_cluster = obj.assign_with_similarity(speaker_cluster,name_cand_dict, spoken_cluster,assigned_dict,mode_choose = 'SUP2')
+     
+     #speaker_cluster = obj.propagate_M2(speaker_cluster,M2_dict,assigned_dict)
+     #speaker_cluster = obj.method_M3(speaker_cluster, speaker_document, name_document, assigned_dict,name_pers = False)
+     
+     speaker_cluster = obj.assign_with_propoagate(speaker_cluster,name_cand_dict,assigned_dict)     
+     speaker_cluster = obj.assign_with_similarity(speaker_cluster,name_cand_dict, spoken_cluster,assigned_dict,mode_choose = 'SUP1')
+     
      #temporal_dict = obj.temporal_count(speaker_cluster)
      #result_dict = obj.get_results_untill_now(speaker_cluster,with_labels = False)
      #speaker_cluster = obj.temporal_assignment(speaker_cluster, temporal_dict, result_dict)
@@ -671,11 +1114,14 @@ if __name__ == '__main__':
      y_pred = svc.predict(X_test)
      print "svc: ", np.sum(y_pred == y_test)
      """
-     speaker_cluster = obj.assign_raw_supervised(speaker_cluster,mode_name = "SVM", all_assign = True)
+  #   speaker_cluster = obj.assign_raw_supervised2(speaker_cluster, spoken_cluster, name_cand_dict)
+  #   speaker_cluster = obj.assign_with_similarity(speaker_cluster,name_cand_dict, spoken_cluster)
+     
+     #speaker_cluster = obj.assign_raw_supervised(speaker_cluster,mode_name = "SVM", all_assign = True)
      #result_dict = obj.get_results_untill_now(speaker_cluster,with_labels = True)
      ##speaker_cluster = obj.assign_raw_supervised_cluster_based(speaker_cluster, supervised_dict)
      mapping_file1 = r'C:\Users\daredavil\Documents\hbredin-repere\phase1\train\groundtruth\mapping.txt'
      mapping_file2 = r'C:\Users\daredavil\Documents\hbredin-repere\phase1\dev\groundtruth\mapping.txt'
      mapping_dict = get_mapping_dict([mapping_file1, mapping_file2])
-     fuse_file_name = r'TEST_M3__M2_propagate_zeroout_only_SVM.hyp'
+     fuse_file_name = r'TEST2_SUPERVISED_M3_ITU.hyp'
      obj.write_as_hyp(speaker_cluster, fuse_file_name, mapping_dict)
